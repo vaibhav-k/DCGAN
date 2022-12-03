@@ -36,6 +36,7 @@ class DCGAN:
         channels: int = 1,
         input_dimensions: int = 100,
         output_dimensions: int = 512,
+        alpha: float = 0.2,
     ):
         """
         Method to build the generator part of the GAN architecture
@@ -44,19 +45,19 @@ class DCGAN:
         inputShape = (dim, dim, depth)
         model = Sequential()
         chanDim = -1
-        # first set of FC => RELU => BN layers
+        # first set of FC => Leaky ReLU => BN layers
         model.add(Dense(input_dim=input_dimensions, units=output_dimensions))
-        model.add(Activation("relu"))
+        model.add(LeakyReLU(alpha=alpha))
         model.add(BatchNormalization())
-        # second set of FC => RELU => BN layers
+        # second set of FC => Leaky ReLU => BN layers
         model.add(Dense(dim * dim * depth))
-        model.add(Activation("relu"))
+        model.add(LeakyReLU(alpha=alpha))
         model.add(BatchNormalization())
         # reshape the output of the previous layer set
         model.add(Reshape(inputShape))
-        # upsample + apply a transposed convolution, RELU, and BN
+        # upsample + apply a transposed convolution => Leaky ReLU => BN
         model.add(Conv2DTranspose(32, (5, 5), strides=(2, 2), padding="same"))
-        model.add(Activation("relu"))
+        model.add(LeakyReLU(alpha=alpha))
         model.add(BatchNormalization(axis=chanDim))
         # apply another upsample and transposed convolution
         model.add(Conv2DTranspose(channels, (5, 5),
@@ -66,10 +67,11 @@ class DCGAN:
         return model
 
     @staticmethod
-    def build_discriminator(width: int, height: int, depth: int, alpha: int = 0.2):
+    def build_discriminator(width: int, height: int, depth: int, alpha: float = 0.2):
         """
         Method to build the discriminator part of the GAN architecture
         """
+
         # initialize the model along with the input shape
         inputShape = (height, width, depth)
         model = Sequential()
@@ -100,6 +102,7 @@ def load_data() -> np.ndarray:
     """
     Load the Fashion MNIST dataset and do preliminary data manipulation
     """
+
     # load the Fashion MNIST dataset
     print("Loading the Fashion MNIST dataset...")
     ((X_train, _), (X_test, _)) = fashion_mnist.load_data()
@@ -112,17 +115,20 @@ def load_data() -> np.ndarray:
     return images
 
 
-def build_generator_discriminator():
+def build_generator_discriminator(
+    dim: int, depth: int, channels: int, width: int, height: int, depth: int
+):
     """
     Build the Generator and Discriminator models for use in the downstream GAN
     """
+
     # build the generator
     print("Building the generator...")
-    gen = DCGAN.build_generator(7, 64, channels=1)
+    gen = DCGAN.build_generator(dim, depth, channels)
 
     # build the discriminator
     print("Building the discriminator...")
-    disc = DCGAN.build_discriminator(28, 28, 1)
+    disc = DCGAN.build_discriminator(width, height, depth)
 
     # compile the model
     disc.compile(
@@ -139,6 +145,7 @@ def build_gan(gen, disc):
     """
     Build the GAN which will be trained in the later part
     """
+
     # build the adversarial model
     print("Building the GAN...")
     ganInput = Input(shape=(100,))
@@ -159,6 +166,7 @@ def make_noise(low: int = -1, high: int = 1, size: tuple = None):
     """
     Generate random noise vectors for the generative model training
     """
+
     return uniform(low, high, size)
 
 
@@ -166,17 +174,19 @@ def write_visualization(p, vis):
     """
     Write the visualization to disk
     """
+
     p = os.path.sep.join(p)
     cv2.imwrite(p, vis)
 
 
 def train_gan(images, gen, disc, gan):
     """
-    Train the GAN model defined
+    Train the GAN model
     """
+
     print("Starting training...")
     # randomly generate some benchmark noise (to visualize how the generative modeling is learning)
-    benchmark_noise = make_noise(-1, 1, (256, 100))
+    benchmark_noise = make_noise(size=(256, 100))
 
     # loop over the epochs
     for epoch in range(NUM_EPOCHS):
@@ -192,7 +202,7 @@ def train_gan(images, gen, disc, gan):
             # select the next batch of images
             batch_of_images = images[i * BATCH_SIZE: (i + 1) * BATCH_SIZE]
             # randomly generate noise for the generator to predict on
-            generated_noise = make_noise(-1, 1, (BATCH_SIZE, 100))
+            generated_noise = make_noise(size=(BATCH_SIZE, 100))
 
             # generate images using the noise
             generated_images = gen.predict(generated_noise, verbose=0)
@@ -211,7 +221,7 @@ def train_gan(images, gen, disc, gan):
 
             # train the generator via the adversarial model
             # generate random noise
-            generated_noise = make_noise(-1, 1, (BATCH_SIZE, 100))
+            generated_noise = make_noise(size=(BATCH_SIZE, 100))
             fake_labels = [1] * BATCH_SIZE
             fake_labels = np.reshape(fake_labels, (-1,))
             # train the generator
@@ -265,6 +275,7 @@ def train_gan(images, gen, disc, gan):
 
 
 if __name__ == "__main__":
+    # initialize some global variables
     NUM_EPOCHS = 50
     BATCH_SIZE = 128
     INIT_LR = 2e-4
@@ -273,9 +284,10 @@ if __name__ == "__main__":
     images = load_data()
 
     # build the generator and discriminator models
-    gen, disc = build_generator_discriminator()
+    gen, disc = build_generator_discriminator(7, 64, 1, 28, 28, 1)
 
     # build the adversarial model
     gan = build_gan(gen, disc)
 
+    # train the GAN model
     train_gan(images, gen, disc, gan)
