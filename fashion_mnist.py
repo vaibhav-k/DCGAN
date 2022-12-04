@@ -4,6 +4,7 @@
 import os
 import cv2
 import numpy as np
+import matplotlib.pyplot as plt
 from imutils import build_montages
 from numpy.random import uniform
 from sklearn.utils import shuffle
@@ -81,21 +82,23 @@ class DCGAN:
                 2, 2), input_shape=inputShape)
         )
         model.add(LeakyReLU(alpha=alpha))
-        model.add(BatchNormalization())
         # second set of CONV => RELU layers
         model.add(Conv2D(64, (5, 5), padding="same", strides=(2, 2)))
         model.add(LeakyReLU(alpha=alpha))
-        model.add(BatchNormalization())
         # first set of FC => RELU layers
         model.add(Flatten())
         model.add(Dense(512))
         model.add(LeakyReLU(alpha=alpha))
-        model.add(BatchNormalization())
         # sigmoid activation to output a single value
         model.add(Dense(1))
         model.add(Activation("sigmoid"))
         # return the discriminator model
         return model
+
+
+NUM_EPOCHS = 50
+BATCH_SIZE = 128
+INIT_LR = 2e-4
 
 
 def load_data() -> np.ndarray:
@@ -115,179 +118,136 @@ def load_data() -> np.ndarray:
     return images
 
 
-def build_generator_discriminator(
-    dim: int, depth: int, channels: int, width: int, height: int, depth: int
-):
-    """
-    Build the Generator and Discriminator models for use in the downstream GAN
-    """
-
+def define_generator(dim, depth, channels):
     # build the generator
     print("Building the generator...")
     gen = DCGAN.build_generator(dim, depth, channels)
+    return gen
 
+
+def define_discriminator(width, height, depth):
     # build the discriminator
     print("Building the discriminator...")
     disc = DCGAN.build_discriminator(width, height, depth)
+    discOpt = Adam(learning_rate=INIT_LR, beta_1=0.5,
+                   decay=INIT_LR / NUM_EPOCHS)
 
-    # compile the model
-    disc.compile(
-        loss="binary_crossentropy",
-        optimizer=Adam(lr=INIT_LR, beta_1=0.5, decay=INIT_LR / NUM_EPOCHS),
-    )
-
-    # setting the discriminator to not be trainable
+    # compile the discriminator
+    disc.compile(loss="binary_crossentropy", optimizer=discOpt)
     disc.trainable = False
-    return gen, disc
+    return disc
 
 
-def build_gan(gen, disc):
+def define_dcgan(disc, gen):
     """
     Build the GAN which will be trained in the later part
     """
 
-    # build the adversarial model
+    # build the adversarial model by combining the generator and discriminator
     print("Building the GAN...")
     ganInput = Input(shape=(100,))
     ganOutput = disc(gen(ganInput))
+    dcgan = Model(ganInput, ganOutput)
 
-    # combine the generator and discriminator together
-    gan = Model(ganInput, ganOutput)
-
-    # compile the GAN
-    gan.compile(
-        loss="binary_crossentropy",
-        optimizer=Adam(lr=INIT_LR, beta_1=0.5, decay=INIT_LR / NUM_EPOCHS),
-    )
-    return gan
+    # compile the DCGAN
+    ganOpt = Adam(learning_rate=INIT_LR, beta_1=0.5,
+                  decay=INIT_LR / NUM_EPOCHS)
+    dcgan.compile(loss="binary_crossentropy", optimizer=ganOpt)
+    return dcgan
 
 
-def make_noise(low: int = -1, high: int = 1, size: tuple = None):
+def train_dcgan(disc, gen, gan):
     """
-    Generate random noise vectors for the generative model training
+    Train the DCGAN model
     """
 
-    return uniform(low, high, size)
-
-
-def write_visualization(p, vis):
-    """
-    Write the visualization to disk
-    """
-
-    p = os.path.sep.join(p)
-    cv2.imwrite(p, vis)
-
-
-def train_gan(images, gen, disc, gan):
-    """
-    Train the GAN model
-    """
-
-    print("Starting training...")
-    # randomly generate some benchmark noise (to visualize how the generative modeling is learning)
-    benchmark_noise = make_noise(size=(256, 100))
-
+    # randomly generate some benchmark noise so we can consistently
+    # visualize how the generative modeling is learning
+    print("[INFO] starting training...")
+    benchmarkNoise = np.random.uniform(-1, 1, size=(256, 100))
     # loop over the epochs
-    for epoch in range(NUM_EPOCHS):
-        print(f"Starting epoch {epoch + 1} of {NUM_EPOCHS}...")
-        # compute the number of batches per epoch
-        batches_per_epoch = int(images.shape[0] / BATCH_SIZE)
-
+    for epoch in range(0, NUM_EPOCHS):
+        # show epoch information and compute the number of batches per
+        # epoch
+        print("[INFO] starting epoch {} of {}...".format(epoch + 1, NUM_EPOCHS))
+        batchesPerEpoch = int(trainImages.shape[0] / BATCH_SIZE)
         # loop over the batches
-        for i in range(batches_per_epoch):
-            # initialize the output path
+        for i in range(0, batchesPerEpoch):
+            # initialize an (empty) output path
             p = None
-
-            # select the next batch of images
-            batch_of_images = images[i * BATCH_SIZE: (i + 1) * BATCH_SIZE]
-            # randomly generate noise for the generator to predict on
-            generated_noise = make_noise(size=(BATCH_SIZE, 100))
-
-            # generate images using the noise
-            generated_images = gen.predict(generated_noise, verbose=0)
-
-            # concatenate the actual images and the generated images
-            X = np.concatenate((batch_of_images, generated_images))
-            # construct class labels for the discriminator
+            # select the next batch of images, then randomly generate
+            # noise for the generator to predict on
+            imageBatch = trainImages[i * BATCH_SIZE: (i + 1) * BATCH_SIZE]
+            noise = np.random.uniform(-1, 1, size=(BATCH_SIZE, 100))
+            # generate images using the noise + generator model
+            genImages = gen.predict(noise, verbose=0)
+            # concatenate the *actual* images and the *generated* images,
+            # construct class labels for the discriminator, and shuffle
+            # the data
+            X = np.concatenate((imageBatch, genImages))
             y = ([1] * BATCH_SIZE) + ([0] * BATCH_SIZE)
             y = np.reshape(y, (-1,))
-
-            # shuffle the data
             (X, y) = shuffle(X, y)
-
             # train the discriminator on the data
-            discriminator_loss = disc.train_on_batch(X, y)
-
-            # train the generator via the adversarial model
-            # generate random noise
-            generated_noise = make_noise(size=(BATCH_SIZE, 100))
-            fake_labels = [1] * BATCH_SIZE
-            fake_labels = np.reshape(fake_labels, (-1,))
-            # train the generator
-            gan_loss = gan.train_on_batch(generated_noise, fake_labels)
-
-            # check to see if this is the end of an epoch
-            if i == batches_per_epoch - 1:
-                # initialize the output path
-                p = [
-                    "./", "epoch_{}_output.png".format(str(epoch + 1).zfill(4))]
-
-            # check to see if we should visualize the current batch for the epoch
+            discLoss = disc.train_on_batch(X, y)
+            # let's now train our generator via the adversarial model by
+            # (1) generating random noise and (2) training the generator
+            # with the discriminator weights frozen
+            noise = np.random.uniform(-1, 1, (BATCH_SIZE, 100))
+            fakeLabels = [1] * BATCH_SIZE
+            fakeLabels = np.reshape(fakeLabels, (-1,))
+            ganLoss = gan.train_on_batch(noise, fakeLabels)
+            # check to see if this is the end of an epoch, and if so,
+            # initialize the output path
+            if i == batchesPerEpoch - 1:
+                p = ["output", "epoch_{}_output.png".format(
+                    str(epoch + 1).zfill(4))]
+            # otherwise, check to see if we should visualize the current
+            # batch for the epoch
             else:
-                # create more visualizations early in the training process
+                # create more visualizations early in the training
+                # process
                 if epoch < 10 and i % 25 == 0:
                     p = [
-                        "./",
+                        "output",
                         "epoch_{}_step_{}.png".format(
                             str(epoch + 1).zfill(4), str(i).zfill(5)
                         ),
                     ]
-
-                # visualizations later in the training process are less interesting
+                # visualizations later in the training process are less
+                # interesting
                 elif epoch >= 10 and i % 100 == 0:
                     p = [
-                        "./",
+                        "output",
                         "epoch_{}_step_{}.png".format(
                             str(epoch + 1).zfill(4), str(i).zfill(5)
                         ),
                     ]
-
-            # check to see if we should visualize the output of the generator model on our benchmark data
+            # check to see if we should visualize the output of the
+            # generator model on our benchmark data
             if p is not None:
                 # show loss information
                 print(
-                    "Step {}_{}: discriminator_loss={:.6f}, "
+                    "[INFO] Step {}_{}: discriminator_loss={:.6f}, "
                     "adversarial_loss={:.6f}".format(
-                        epoch + 1, i, discriminator_loss, gan_loss
-                    )
+                        epoch + 1, i, discLoss, ganLoss)
                 )
-
-                # make predictions on the benchmark noise
-                images = gen.predict(benchmark_noise)
-                # scale it back to the range [0, 255]
+                # make predictions on the benchmark noise, scale it back
+                # to the range [0, 255], and generate the montage
+                images = gen.predict(benchmarkNoise)
                 images = ((images * 127.5) + 127.5).astype("uint8")
-                # generate the montage
                 images = np.repeat(images, 3, axis=-1)
                 vis = build_montages(images, (28, 28), (16, 16))[0]
+                # write the visualization to disk
+                p = os.path.sep.join(p)
+                cv2.imwrite(p, vis)
 
-                write_visualization(p, vis)
 
+trainImages = load_data()
 
-if __name__ == "__main__":
-    # initialize some global variables
-    NUM_EPOCHS = 50
-    BATCH_SIZE = 128
-    INIT_LR = 2e-4
+gen = define_generator(7, 64, 1)
+disc = define_discriminator(28, 28, 1)
 
-    # load the Fashion MNIST dataset
-    images = load_data()
+gan = define_dcgan(disc, gen)
 
-    # build the generator and discriminator models
-    gen, disc = build_generator_discriminator(7, 64, 1, 28, 28, 1)
-
-    # build the adversarial model
-    gan = build_gan(gen, disc)
-
-    # train the GAN model
-    train_gan(images, gen, disc, gan)
+train_dcgan(disc, gen, gan)
