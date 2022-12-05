@@ -24,6 +24,11 @@ from tensorflow.keras.layers import (
 from tensorflow.keras.models import Model, Sequential
 
 
+NUM_EPOCHS = 50
+BATCH_SIZE = 128
+INIT_LR = 2e-4
+
+
 class DCGAN:
     """
     Class to instantiate a Deep Convolutional Generative Adversarial Networks.
@@ -96,11 +101,6 @@ class DCGAN:
         return model
 
 
-NUM_EPOCHS = 50
-BATCH_SIZE = 128
-INIT_LR = 2e-4
-
-
 def load_data() -> np.ndarray:
     """
     Load the Fashion MNIST dataset and do preliminary data manipulation
@@ -161,52 +161,59 @@ def train_dcgan(disc, gen, gan):
     Train the DCGAN model
     """
 
-    # randomly generate some benchmark noise so we can consistently
-    # visualize how the generative modeling is learning
-    print("[INFO] starting training...")
+    print("Starting training the DCGAN...")
+
+    # randomly generate some benchmark noise
     benchmarkNoise = np.random.uniform(-1, 1, size=(256, 100))
+
     # loop over the epochs
-    for epoch in range(0, NUM_EPOCHS):
+    for epoch in range(NUM_EPOCHS):
         # show epoch information and compute the number of batches per
         # epoch
-        print("[INFO] starting epoch {} of {}...".format(epoch + 1, NUM_EPOCHS))
+        print(f"\nStarting epoch {epoch + 1} of {NUM_EPOCHS}...")
         batchesPerEpoch = int(trainImages.shape[0] / BATCH_SIZE)
+
         # loop over the batches
-        for i in range(0, batchesPerEpoch):
+        for i in range(batchesPerEpoch):
             # initialize an (empty) output path
             p = None
-            # select the next batch of images, then randomly generate
-            # noise for the generator to predict on
+
+            # select the next batch of images
             imageBatch = trainImages[i * BATCH_SIZE: (i + 1) * BATCH_SIZE]
+
+            # randomly generate noise for the generator to predict on
             noise = np.random.uniform(-1, 1, size=(BATCH_SIZE, 100))
+
             # generate images using the noise + generator model
             genImages = gen.predict(noise, verbose=0)
-            # concatenate the *actual* images and the *generated* images,
-            # construct class labels for the discriminator, and shuffle
-            # the data
+
+            # concatenate the actual images and the generated images
             X = np.concatenate((imageBatch, genImages))
+
+            # construct class labels for the discriminator
             y = ([1] * BATCH_SIZE) + ([0] * BATCH_SIZE)
             y = np.reshape(y, (-1,))
+
+            # shuffle the data
             (X, y) = shuffle(X, y)
+
             # train the discriminator on the data
             discLoss = disc.train_on_batch(X, y)
-            # let's now train our generator via the adversarial model by
-            # (1) generating random noise and (2) training the generator
-            # with the discriminator weights frozen
+
+            # train the generator via the adversarial model
             noise = np.random.uniform(-1, 1, (BATCH_SIZE, 100))
             fakeLabels = [1] * BATCH_SIZE
             fakeLabels = np.reshape(fakeLabels, (-1,))
             ganLoss = gan.train_on_batch(noise, fakeLabels)
-            # check to see if this is the end of an epoch, and if so,
-            # initialize the output path
+
+            # check to see if this is the end of an epoch
             if i == batchesPerEpoch - 1:
+                # initialize the output path
                 p = ["output", "epoch_{}_output.png".format(
                     str(epoch + 1).zfill(4))]
-            # otherwise, check to see if we should visualize the current
-            # batch for the epoch
+            # check to see if we should visualize the current batch for the epoch
             else:
-                # create more visualizations early in the training
-                # process
+                # create more visualizations early in the training process
                 if epoch < 10 and i % 25 == 0:
                     p = [
                         "output",
@@ -214,8 +221,7 @@ def train_dcgan(disc, gen, gan):
                             str(epoch + 1).zfill(4), str(i).zfill(5)
                         ),
                     ]
-                # visualizations later in the training process are less
-                # interesting
+                # visualizations later in the training process are less interesting
                 elif epoch >= 10 and i % 100 == 0:
                     p = [
                         "output",
@@ -223,31 +229,32 @@ def train_dcgan(disc, gen, gan):
                             str(epoch + 1).zfill(4), str(i).zfill(5)
                         ),
                     ]
-            # check to see if we should visualize the output of the
-            # generator model on our benchmark data
+
+            # visualize the output of the generator model on our benchmark data
             if p is not None:
                 # show loss information
                 print(
-                    "[INFO] Step {}_{}: discriminator_loss={:.6f}, "
+                    "Step {}_{}: discriminator_loss={:.6f}, "
                     "adversarial_loss={:.6f}".format(
                         epoch + 1, i, discLoss, ganLoss)
                 )
-                # make predictions on the benchmark noise, scale it back
-                # to the range [0, 255], and generate the montage
+                # make predictions on the benchmark noise
                 images = gen.predict(benchmarkNoise)
+                # scale it back to the range [0, 255] and generate the montage
                 images = ((images * 127.5) + 127.5).astype("uint8")
                 images = np.repeat(images, 3, axis=-1)
                 vis = build_montages(images, (28, 28), (16, 16))[0]
+
                 # write the visualization to disk
                 p = os.path.sep.join(p)
                 cv2.imwrite(p, vis)
 
 
-trainImages = load_data()
+if __name__ == "__main__":
+    trainImages = load_data()
 
-gen = define_generator(7, 64, 1)
-disc = define_discriminator(28, 28, 1)
+    gen = define_generator(7, 64, 1)
+    disc = define_discriminator(28, 28, 1)
 
-gan = define_dcgan(disc, gen)
-
-train_dcgan(disc, gen, gan)
+    gan = define_dcgan(disc, gen)
+    train_dcgan(disc, gen, gan)
