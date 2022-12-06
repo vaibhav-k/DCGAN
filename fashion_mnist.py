@@ -166,12 +166,18 @@ def train_dcgan(disc, gen, gan):
     # randomly generate some benchmark noise
     benchmarkNoise = np.random.uniform(-1, 1, size=(256, 100))
 
+    # visualize the GAN loss
+    gan_loss_list = []
+
     # loop over the epochs
     for epoch in range(NUM_EPOCHS):
-        # show epoch information and compute the number of batches per
-        # epoch
         print(f"\nStarting epoch {epoch + 1} of {NUM_EPOCHS}...")
+
+        # compute the number of batches per epoch
         batchesPerEpoch = int(trainImages.shape[0] / BATCH_SIZE)
+
+        # compute the average of the GAN loss in this epoch
+        av_gan_loss = []
 
         # loop over the batches
         for i in range(batchesPerEpoch):
@@ -205,6 +211,7 @@ def train_dcgan(disc, gen, gan):
             fakeLabels = [1] * BATCH_SIZE
             fakeLabels = np.reshape(fakeLabels, (-1,))
             ganLoss = gan.train_on_batch(noise, fakeLabels)
+            av_gan_loss.append(ganLoss)
 
             # check to see if this is the end of an epoch
             if i == batchesPerEpoch - 1:
@@ -213,6 +220,7 @@ def train_dcgan(disc, gen, gan):
                     str(epoch + 1).zfill(4))]
             # check to see if we should visualize the current batch for the epoch
             else:
+
                 # create more visualizations early in the training process
                 if epoch < 10 and i % 25 == 0:
                     p = [
@@ -221,6 +229,7 @@ def train_dcgan(disc, gen, gan):
                             str(epoch + 1).zfill(4), str(i).zfill(5)
                         ),
                     ]
+
                 # visualizations later in the training process are less interesting
                 elif epoch >= 10 and i % 100 == 0:
                     p = [
@@ -240,14 +249,23 @@ def train_dcgan(disc, gen, gan):
                 )
                 # make predictions on the benchmark noise
                 images = gen.predict(benchmarkNoise)
-                # scale it back to the range [0, 255] and generate the montage
+
+                # scale it back to the range [0, 255]
                 images = ((images * 127.5) + 127.5).astype("uint8")
                 images = np.repeat(images, 3, axis=-1)
+                # generate the montage
                 vis = build_montages(images, (28, 28), (16, 16))[0]
 
                 # write the visualization to disk
                 p = os.path.sep.join(p)
                 cv2.imwrite(p, vis)
+        gan_loss_list.append(sum(av_gan_loss) / len(av_gan_loss))
+
+    # plot the GAN loss
+    plt.plot(range(NUM_EPOCHS), gan_loss_list)
+    plt.title("The loss of the DCGAN model at every epoch")
+    plt.xlabel("Epoch number")
+    plt.ylabel("DCGAN loss")
 
 
 if __name__ == "__main__":
