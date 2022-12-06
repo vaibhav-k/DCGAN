@@ -262,17 +262,22 @@ def train_dcgan(disc, gen, gan):
         gan_loss_list.append(sum(av_gan_loss) / len(av_gan_loss))
 
     # plot the GAN loss
-    plt.plot(range(NUM_EPOCHS), gan_loss_list)
+    plt.plot(gan_loss_list)
     plt.title("The loss of the DCGAN model at every epoch")
-    plt.xlabel("Epoch number")
     plt.ylabel("DCGAN loss")
+    plt.show()
 
 
 if __name__ == "__main__":
+    # load the images
     trainImages = load_data()
 
+    # define the generator and discriminator
     gen = define_generator(7, 64, 1)
     disc = define_discriminator(28, 28, 1)
 
+    # define the DCGAN model
     gan = define_dcgan(disc, gen)
+
+    # train the created model
     train_dcgan(disc, gen, gan)
