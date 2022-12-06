@@ -129,11 +129,11 @@ def define_discriminator(width, height, depth):
     # build the discriminator
     print("Building the discriminator...")
     disc = DCGAN.build_discriminator(width, height, depth)
-    discOpt = Adam(learning_rate=INIT_LR, beta_1=0.5,
-                   decay=INIT_LR / NUM_EPOCHS)
+    disc_opt = Adam(learning_rate=INIT_LR, beta_1=0.5,
+                    decay=INIT_LR / NUM_EPOCHS)
 
     # compile the discriminator
-    disc.compile(loss="binary_crossentropy", optimizer=discOpt)
+    disc.compile(loss="binary_crossentropy", optimizer=disc_opt)
     disc.trainable = False
     return disc
 
@@ -145,14 +145,14 @@ def define_dcgan(disc, gen):
 
     # build the adversarial model by combining the generator and discriminator
     print("Building the GAN...")
-    ganInput = Input(shape=(100,))
-    ganOutput = disc(gen(ganInput))
-    dcgan = Model(ganInput, ganOutput)
+    gan_input = Input(shape=(100,))
+    gan_output = disc(gen(gan_input))
+    dcgan = Model(gan_input, gan_output)
 
     # compile the DCGAN
-    ganOpt = Adam(learning_rate=INIT_LR, beta_1=0.5,
-                  decay=INIT_LR / NUM_EPOCHS)
-    dcgan.compile(loss="binary_crossentropy", optimizer=ganOpt)
+    gan_opt = Adam(learning_rate=INIT_LR, beta_1=0.5,
+                   decay=INIT_LR / NUM_EPOCHS)
+    dcgan.compile(loss="binary_crossentropy", optimizer=gan_opt)
     return dcgan
 
 
@@ -174,7 +174,7 @@ def train_dcgan(disc, gen, gan):
         print(f"\nStarting epoch {epoch + 1} of {NUM_EPOCHS}...")
 
         # compute the number of batches per epoch
-        batches_per_epoch = int(images.shape[0] / BATCH_SIZE)
+        batches_per_epoch = int(train_images.shape[0] / BATCH_SIZE)
 
         # compute the average of the GAN loss in this epoch
         av_gan_loss = []
@@ -185,16 +185,16 @@ def train_dcgan(disc, gen, gan):
             p = None
 
             # select the next batch of images
-            image_batch = images[i * BATCH_SIZE: (i + 1) * BATCH_SIZE]
+            image_batch = train_images[i * BATCH_SIZE: (i + 1) * BATCH_SIZE]
 
             # randomly generate noise for the generator to predict on
-            noise = np.random.uniform(-1, 1, size=(BATCH_SIZE, 100))
+            noise_for_gen = np.random.uniform(-1, 1, size=(BATCH_SIZE, 100))
 
             # generate images using the noise + generator model
-            gen_images = gen.predict(noise, verbose=0)
+            genImages = gen.predict(noise_for_gen, verbose=0)
 
             # concatenate the actual images and the generated images
-            X = np.concatenate((image_batch, gen_images))
+            X = np.concatenate((image_batch, genImages))
 
             # construct class labels for the discriminator
             y = ([1] * BATCH_SIZE) + ([0] * BATCH_SIZE)
@@ -204,14 +204,16 @@ def train_dcgan(disc, gen, gan):
             (X, y) = shuffle(X, y)
 
             # train the discriminator on the data
-            disc_loss = disc.train_on_batch(X, y)
+            discLoss = disc.train_on_batch(X, y)
 
             # train the generator via the adversarial model
-            noise = np.random.uniform(-1, 1, (BATCH_SIZE, 100))
+            noise_for_gan = np.random.uniform(-1, 1, (BATCH_SIZE, 100))
             fake_labels = [1] * BATCH_SIZE
             fake_labels = np.reshape(fake_labels, (-1,))
-            gan_loss = gan.train_on_batch(noise, fake_labels)
-            av_gan_loss.append(gan_loss)
+            ganLoss = gan.train_on_batch(noise_for_gan, fake_labels)
+
+            # add the loss to the list for visualizing
+            av_gan_loss.append(ganLoss)
 
             # check to see if this is the end of an epoch
             if i == batches_per_epoch - 1:
@@ -245,16 +247,17 @@ def train_dcgan(disc, gen, gan):
                 print(
                     "Step {}_{}: discriminator_loss={:.6f}, "
                     "adversarial_loss={:.6f}".format(
-                        epoch + 1, i, disc_loss, gan_loss)
+                        epoch + 1, i, discLoss, ganLoss)
                 )
                 # make predictions on the benchmark noise
-                images = gen.predict(benchmark_noise)
+                generated_images = gen.predict(benchmark_noise)
 
                 # scale it back to the range [0, 255]
-                images = ((images * 127.5) + 127.5).astype("uint8")
-                images = np.repeat(images, 3, axis=-1)
+                generated_images = (
+                    (generated_images * 127.5) + 127.5).astype("uint8")
+                generated_images = np.repeat(generated_images, 3, axis=-1)
                 # generate the montage
-                vis = build_montages(images, (28, 28), (16, 16))[0]
+                vis = build_montages(generated_images, (28, 28), (16, 16))[0]
 
                 # write the visualization to disk
                 p = os.path.sep.join(p)
@@ -265,12 +268,13 @@ def train_dcgan(disc, gen, gan):
     plt.plot(gan_loss_list)
     plt.title("The loss of the DCGAN model at every epoch")
     plt.ylabel("DCGAN loss")
+    plt.xlabel("Epoch number")
     plt.show()
 
 
 if __name__ == "__main__":
     # load the images
-    images = load_data()
+    train_images = load_data()
 
     # define the generator and discriminator
     gen = define_generator(7, 64, 1)
