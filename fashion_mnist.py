@@ -43,7 +43,7 @@ class DCGAN:
         input_dimensions: int = 100,
         output_dimensions: int = 512,
         alpha: float = 0.2,
-    ):
+    ) -> Sequential:
         """
         Method to build the generator part of the GAN architecture
         """
@@ -73,7 +73,9 @@ class DCGAN:
         return model
 
     @staticmethod
-    def build_discriminator(width: int, height: int, depth: int, alpha: float = 0.2):
+    def build_discriminator(
+        width: int, height: int, depth: int, alpha: float = 0.2
+    ) -> Sequential:
         """
         Method to build the discriminator part of the GAN architecture
         """
@@ -118,14 +120,14 @@ def load_data() -> np.ndarray:
     return images
 
 
-def define_generator(dim, depth, channels):
+def define_generator(dim: int, depth: int, channels: int):
     # build the generator
     print("Building the generator...")
     gen = DCGAN.build_generator(dim, depth, channels)
     return gen
 
 
-def define_discriminator(width, height, depth):
+def define_discriminator(width: int, height: int, depth: int):
     # build the discriminator
     print("Building the discriminator...")
     disc = DCGAN.build_discriminator(width, height, depth)
