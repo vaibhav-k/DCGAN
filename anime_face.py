@@ -1,371 +1,228 @@
-# import the required libraries
-import tensorflow as tf
-from tensorflow import keras
-from tensorflow.keras.layers import Input, Reshape, Dropout, Dense
-from tensorflow.keras.layers import Flatten, BatchNormalization
-from tensorflow.keras.layers import Activation
-from tensorflow.keras.layers import LeakyReLU, ReLU, PReLU
-from tensorflow.keras.layers import Conv2D, Conv2DTranspose
-from tensorflow.keras.models import Sequential, Model, load_model
-from tensorflow.keras.optimizers import Adam
-import numpy as np
-from PIL import Image
-import os
+import glob
+import imageio
 import matplotlib.pyplot as plt
-
-# configure tensorflow to only use the GPU
-gpus = tf.config.experimental.list_physical_devices("GPU")
-if gpus:
-    try:
-        tf.config.experimental.set_visible_devices(gpus[0], "GPU")
-        print("using GPU")
-    except RuntimeError as e:
-        print(e)
-
-train_ds = tf.keras.preprocessing.image_dataset_from_directory(
-    "data/",
-    label_mode=None,
-    color_mode="rgb",
-    batch_size=128,
-    image_size=(64, 64),
-    shuffle=True,
-)
-
-train_ds = train_ds.map(lambda x: ((x / 127.5) - 1))
-
-# initialize the weights
-init = tf.keras.initializers.RandomNormal(stddev=0.02)
+import numpy as np
+import os
+import tensorflow as tf
+from skimage.transform import resize
+from multiprocessing import Pool, cpu_count
 
 
-def build_generator(seed_size):
+def load_image(filename):
     """
-    Builds the generator model
-
-    Parameters:
-        seed_size: size of the random vector fed into the generator
-
-    Returns:
-        model: keras model representing the generator
+    Load an image and resize it to 64x64
     """
-    model = Sequential()
-
-    # Block - 1
-    model.add(Dense(4 * 4 * 1024, kernel_initializer=init, input_dim=seed_size))
-    model.add(BatchNormalization())
-    model.add(ReLU())
-    model.add(Reshape((4, 4, 1024)))  # Resulting shape = (4,4,1024)
-
-    # Block - 2
-    model.add(
-        Conv2DTranspose(
-            512,
-            kernel_size=5,
-            strides=2,
-            padding="same",
-            use_bias=False,
-            kernel_initializer=init,
-        )
-    )
-    model.add(BatchNormalization())
-    model.add(ReLU())  # Resulting shape = (8,8,512)
-
-    # Block - 3
-    model.add(
-        Conv2DTranspose(
-            256,
-            kernel_size=5,
-            strides=2,
-            padding="same",
-            use_bias=False,
-            kernel_initializer=init,
-        )
-    )
-    model.add(BatchNormalization())
-    model.add(ReLU())  # Resulting shape = (16,16,256)
-
-    # Block - 4
-    model.add(
-        Conv2DTranspose(
-            128,
-            kernel_size=3,
-            strides=2,
-            padding="same",
-            use_bias=False,
-            kernel_initializer=init,
-        )
-    )
-    model.add(BatchNormalization())
-    model.add(ReLU())  # Resulting shape = (32,32,128)
-
-    # Block - 5
-    model.add(
-        Conv2DTranspose(
-            3,
-            kernel_size=3,
-            strides=2,
-            padding="same",
-            use_bias=False,
-            kernel_initializer=init,
-        )
-    )
-    model.add(Activation("tanh"))  # Resulting shape = (64,64,3)
-
-    return model
+    image = imageio.v3.imread(os.path.join(dir_path, filename))
+    image_resized = resize(image, (64, 64), preserve_range=True)
+    return image_resized.astype(np.uint8)
 
 
-def build_discriminator(image_length, image_channels):
+def image_generator(batch_size=32):
     """
-    Builds the generator model
+    Yield batches of images
+    """
+    # Get the list of JPEG files in the directory
+    filenames = [filename for filename in os.listdir(
+        dir_path) if filename.endswith(".jpg") or filename.endswith(".jpeg")]
+    # Define the pool of worker processes for multiprocessing
+    pool = Pool(processes=cpu_count())
+    # Iterate over the filenames in batches of batch_size
+    for i in range(0, len(filenames), batch_size):
+        batch_filenames = filenames[i:i+batch_size]
+        # Use the pool to load and resize the images in parallel
+        batch_images = pool.map(load_image, batch_filenames)
+        # Convert the batch of images to a NumPy array and yield it
+        yield np.array(batch_images)
 
-    Parameters:
-        image_length: length of a side of the square image
-        image_channels: number of channels in the image
 
-    Returns:
-        model: keras model representing the discriminator
+def convert_images_npy(dir_path):
+    batch_size = 32
+    # Iterating over the batches of images
+    generator = image_generator(batch_size=batch_size)
+    i = 0
+    while i <= len(os.listdir(dir_path)):
+        images = next(generator)
+        i += batch_size
+        print(f"{i} out of {len(os.listdir(dir_path))}")
+        np.save(f"./animefaces_data/batch_{i}.npy", images)
+
+
+def merge_npys(dir_path):
+    npy_files = [os.path.join(dir_path, f)
+                 for f in os.listdir(dir_path) if f.endswith(".npy")]
+    data = np.load(npy_files[0], allow_pickle=True)
+    for f in npy_files[1:]:
+        data = np.concatenate((data, np.load(f, allow_pickle=True)), axis=0)
+    np.save("./animefaces_data/merged_data.npy", data)
+
+
+def load_data(npy_path):
+    return np.load(npy_path)
+
+
+def normalize(X):
+    # normalize pixel values between -1 and 1
+    return (X.astype("float32") - 127.5) / 127.5
+
+
+def build_generator():
+    """
+    Define the generator
+    """
+    generator = tf.keras.Sequential(
+        [
+            tf.keras.layers.Dense(256, input_dim=100),
+            tf.keras.layers.LeakyReLU(alpha=0.2),
+            tf.keras.layers.BatchNormalization(momentum=0.8),
+            tf.keras.layers.Dense(512),
+            tf.keras.layers.LeakyReLU(alpha=0.2),
+            tf.keras.layers.BatchNormalization(momentum=0.8),
+            tf.keras.layers.Dense(1024),
+            tf.keras.layers.LeakyReLU(alpha=0.2),
+            tf.keras.layers.BatchNormalization(momentum=0.8),
+            tf.keras.layers.Dense(64 * 64 * 3, activation="tanh"),
+            tf.keras.layers.Reshape((64, 64, 3)),
+        ]
+    )
+
+    return generator
+
+
+def build_and_compile_disriminator():
+    """
+    Define and compile the discriminator
     """
 
-    model = Sequential()
+    # build the discriminator
+    discriminator = tf.keras.Sequential([
+        # First convolutional layer
+        tf.keras.layers.Conv2D(64, (5, 5), strides=(
+            2, 2), padding='same', input_shape=(64, 64, 3)),
+        tf.keras.layers.LeakyReLU(alpha=0.2),
+        tf.keras.layers.Dropout(0.3),
+        # Second convolutional layer
+        tf.keras.layers.Conv2D(128, (5, 5), strides=(2, 2), padding='same'),
+        tf.keras.layers.LeakyReLU(alpha=0.2),
+        tf.keras.layers.Dropout(0.3),
+        # Third convolutional layer
+        tf.keras.layers.Conv2D(256, (5, 5), strides=(2, 2), padding='same'),
+        tf.keras.layers.LeakyReLU(alpha=0.2),
+        tf.keras.layers.Dropout(0.3),
+        # Fourth convolutional layer
+        tf.keras.layers.Conv2D(512, (5, 5), strides=(2, 2), padding='same'),
+        tf.keras.layers.LeakyReLU(alpha=0.2),
+        tf.keras.layers.Dropout(0.3),
+        # Flatten the output of the final convolutional layer
+        tf.keras.layers.Flatten(),
+        # Final output layer, outputting a single scalar value
+        tf.keras.layers.Dense(1, activation='sigmoid')
+    ])
 
-    # Block - 1
-    model.add(
-        Conv2D(
-            64,
-            kernel_size=3,
-            strides=2,
-            padding="same",
-            use_bias=False,
-            input_shape=(image_length, image_length, image_channels),
-            kernel_initializer=init,
-        )
+    # compile the discriminator
+    discriminator.compile(
+        loss="binary_crossentropy",
+        optimizer=tf.keras.optimizers.Adam(lr=0.0002, beta_1=0.5),
     )
-    model.add(LeakyReLU(alpha=0.2))  # Resulting shape = (32,32,64)
 
-    # Block - 2
-    model.add(
-        Conv2D(
-            128,
-            kernel_size=3,
-            strides=2,
-            padding="same",
-            use_bias=False,
-            kernel_initializer=init,
-        )
-    )
-    model.add(BatchNormalization())
-    model.add(LeakyReLU(alpha=0.2))  # Resulting shape = (16,16,128)
-
-    # Block - 3
-    model.add(
-        Conv2D(
-            256,
-            kernel_size=5,
-            strides=2,
-            padding="same",
-            use_bias=False,
-            kernel_initializer=init,
-        )
-    )
-    model.add(BatchNormalization())
-    model.add(LeakyReLU(alpha=0.2))  # Resulting shape = (8,8,256)
-
-    # Block - 4
-    model.add(
-        Conv2D(
-            512,
-            kernel_size=5,
-            strides=2,
-            padding="same",
-            use_bias=False,
-            kernel_initializer=init,
-        )
-    )
-    model.add(BatchNormalization())
-    model.add(LeakyReLU(alpha=0.2))  # Resulting shape = (4,4,512)
-
-    # Block - 5
-    model.add(
-        Conv2D(
-            1,
-            kernel_size=4,
-            strides=1,
-            padding="valid",
-            use_bias=False,
-            kernel_initializer=init,
-        )
-    )
-    model.add(Flatten())
-    model.add(Activation("sigmoid"))
-
-    return model
+    return discriminator
 
 
-cross_entropy = tf.keras.losses.BinaryCrossentropy()
+def build_and_compile_GAN(discriminator, generator):
+    """
+    Define the GAN
+    """
+    discriminator.trainable = False
+    gan_input = tf.keras.Input(shape=(100,))
+    gan_output = discriminator(generator(gan_input))
+    gan = tf.keras.Model(gan_input, gan_output)
+    gan.compile(loss="binary_crossentropy",
+                optimizer=tf.keras.optimizers.Adam(lr=0.0002, beta_1=0.5))
+
+    return gan
 
 
-class DCGAN(keras.Model):
-    """Subclass of the keras.Model class to define custom training step and loss functions"""
+def generate_noise(n_samples, noise_dim):
+    """
+    Generate noise for the generator
+    """
+    return np.random.normal(0, 1, size=(n_samples, noise_dim))
 
-    def __init__(self, seed_size, image_length, image_channels, **kwargs):
-        """
-        Parameters:
-            seed_size: size of the random vector for the generator
-            image_length: length of a side of the square image
-            image_channels: number of channels in the image
-        """
-        super(DCGAN, self).__init__(**kwargs)
 
-        self.generator = build_generator(seed_size)
-        self.discriminator = build_discriminator(image_length, image_channels)
-        self.seed_size = seed_size
+def train_GAN(discriminator, generator, gan, X):
+    """
+    Training loop
+    """
+    epochs = 10000
+    batch_size = 32
+    sample_interval = 1000
 
-    # Train generator to give realistic images and penalize it for giving images being classified as fake by the discriminator
-    def generator_loss(self, fake_output):
-        """
-        Parameters:
-            fake_output: Tensor containing the respective discriminator's predictions for the batch of images produced
-            by generator (fake iamges).
+    # Create a folder to save the generated images
+    os.makedirs("./anime_face_generated_images", exist_ok=True)
 
-        Returns:
-            cross entropy loss between labels for real images (1's) and the discriminator's estimate
-        """
+    # Train the GAN
+    for epoch in range(epochs):
+        # Train discriminator
+        idx = np.random.randint(0, X.shape[0], batch_size)
+        real_images = X[idx]
+        noise = generate_noise(batch_size, 100)
+        fake_images = generator.predict(noise)
+        discriminator_loss_real = discriminator.train_on_batch(
+            real_images, np.ones((batch_size, 1)))
+        discriminator_loss_fake = discriminator.train_on_batch(
+            fake_images, np.zeros((batch_size, 1)))
+        discriminator_loss = 0.5 * \
+            np.add(discriminator_loss_real, discriminator_loss_fake)
 
-        # The objective is to penalize the generator whenever it produces images which the discriminator classifies as 'fake'
-        return cross_entropy(tf.ones_like(fake_output), fake_output)
+        # Train generator
+        noise = generate_noise(batch_size, 100)
+        generator_loss = gan.train_on_batch(noise, np.ones((batch_size, 1)))
 
-        # smooth parameter is used to induce one sided label smoothing. It can be tuned accordingly
-
-    def discriminator_loss(self, real_output, fake_output, smooth=0.1):
-        """
-        Parameters:
-            real_output: Tensor containing the respective discriminator's predictions for the batch of images taken from
-                        the dataset (real images).
-            fake_output: Tensor containing the respective discriminator's predictions for the batch of images produced
-                        by generator (fake images).
-
-        Returns:
-            total_loss: Loss of the discriminator for misclassifying images
-        """
-        # label for real image is (1-smooth)
-        real_loss = cross_entropy(tf.ones_like(
-            real_output) * (1 - smooth), real_output)
-        fake_loss = cross_entropy(tf.zeros_like(fake_output), fake_output)
-        total_loss = real_loss + fake_loss
-        return total_loss
-
-    def compile(self, generator_optimizer, discriminator_optimizer):
-        """
-        configures model for training by adding optimizers
-
-        Parameters:
-            generator_optimizer: keras optimizer to be used to train generator.
-            discriminator_optimizer: keras optimizer to be used to train discriminator.
-        """
-        super(DCGAN, self).compile()
-        self.generator_optimizer = generator_optimizer
-        self.discriminator_optimizer = discriminator_optimizer
-
-    @tf.function
-    def train_step(self, data):
-        """
-        Takes in training data and does a forward pass
-
-        Parameters:
-            data: a batch from the training data.
-        Returns:
-            gen_loss: loss associated with the generator.
-            disc_loss: loss associated with the discriminator.
-
-        """
-
-        batch_size = tf.shape(data)[0]
-
-        # feed a random input to generator
-        seed = tf.random.normal(shape=(batch_size, self.seed_size))
-
-        with tf.GradientTape() as gen_tape, tf.GradientTape() as disc_tape:
-
-            # generate image using generator
-            generated_image = self.generator(seed, training=True)
-
-            # discriminator's prediction for real image
-            real_output = self.discriminator(data, training=True)
-
-            # discriminator's estimate for fake image
-            fake_output = self.discriminator(generated_image, training=True)
-
-            # compute loss
-            gen_loss = self.generator_loss(fake_output)
-            disc_loss = self.discriminator_loss(real_output, fake_output)
-
-            # optimize generator first
-            generator_grad = gen_tape.gradient(
-                gen_loss, self.generator.trainable_variables
+        # Save generated images
+        if epoch % sample_interval == 0:
+            print(
+                f"Epoch {epoch}: discriminator_loss = {discriminator_loss},\
+                generator_loss = {generator_loss}"
             )
-            discriminator_grad = disc_tape.gradient(
-                disc_loss, self.discriminator.trainable_variables
-            )
+            noise = generate_noise(25, 100)
+            generated_images = generator.predict(noise)
+            generated_images = 0.5 * generated_images + 0.5
+            fig, axs = plt.subplots(5, 5)
+            cnt = 0
+            for i in range(5):
+                for j in range(5):
+                    axs[i, j].imshow(generated_images[cnt, :, :, :])
+                    axs[i, j].axis('off')
+                    cnt += 1
+            fig.savefig(
+                "./anime_face_generated_images/anime_faces_%d.png" % epoch)
+            plt.close()
 
-            # optimize discriminator after generator
-            self.generator_optimizer.apply_gradients(
-                zip(generator_grad, self.generator.trainable_variables)
-            )
-            self.discriminator_optimizer.apply_gradients(
-                zip(discriminator_grad, self.discriminator.trainable_variables)
-            )
-
-        return {"generator loss": gen_loss, "discriminator_loss": disc_loss}
-
-
-# parameters and hyperparameters
-image_length = 64
-image_channels = 3
-batch_size = 128
-seed_size = 128
-
-NUM_ROWS = 4
-NUM_COLS = 7
-MARGIN = 16
-
-fixed_seed = tf.random.normal(shape=(NUM_ROWS * NUM_COLS, seed_size))
-
-# initialize the DCGAN
-generator_optimizer = Adam(learning_rate=0.0002, beta_1=0.5)
-discriminator_optimizer = Adam(learning_rate=0.0002, beta_1=0.5)
-
-dcgan = DCGAN(seed_size, image_length, image_channels)
-dcgan.compile(generator_optimizer, discriminator_optimizer)
-
-with tf.device("/GPU:0"):
-
-    # uncomment the next two lines if not training from scratch
-    # dcgan.generator.load_weights("Weights/generator_weights.h5")
-    # dcgan.discriminator.load_weights("Weights/discriminator_weights.h5")
-
-    history = dcgan.fit(
-        train_ds,
-        epochs=120,
-        batch_size=batch_size,
-    )
-
-# dcgan.generator.load_weights("Weights/generator_weights.h5")
-# dcgan.discriminator.load_weights("Weights/discriminator_weights.h5")
+    # return trained generator
+    return discriminator, generator, gan
 
 
-def generate_faces():
-    """Generates random Anime faces"""
-
-    # generate 64 images by giving 64 inputs
-    noise = tf.random.normal([64, seed_size])
-    generated_images = dcgan.generator(noise)
-
-    fig = plt.figure(figsize=(12, 12))
-    for i in range(generated_images.shape[0]):
-        plt.subplot(8, 8, i + 1)
-        # Convert to range [0,1] for plt.imshow()
-        plt.imshow((generated_images[i, :, :, :] * 0.5 + 0.5))
-        plt.axis("off")
-    plt.show()
+def save_models(discriminator, generator, gan):
+    # make the directory to store models if one does not exist
+    os.makedirs("./anime_faces_GAN_models", exist_ok=True)
+    discriminator.save("./anime_faces_GAN_models/discriminator_model.h5")
+    generator.save("./anime_faces_GAN_models/generator_model.h5")
+    gan.save("./anime_faces_GAN_models/gan_model.h5")
 
 
-generate_faces()
+def load_models(discriminator, generator, gan):
+    from tensorflow.keras.models import load_model
+
+    discriminator = load_model(
+        "./anime_faces_GAN_models/discriminator_model.h5")
+    generator = load_model("./anime_faces_GAN_models/generator_model.h5")
+    gan = load_model("./anime_faces_GAN_models/gan_model.h5")
+    return discriminator, generator, gan
+
+
+if __name__ == "__main__":
+    X = load_data("./animefaces_data/merged_data.npy")
+    X = normalize(X)
+    generator = build_generator()
+    discriminator = build_and_compile_disriminator()
+    gan = build_and_compile_GAN(discriminator, generator)
+    generator = train_GAN(discriminator, generator, gan, X)
