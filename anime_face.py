@@ -37,7 +37,7 @@ def image_generator(batch_size=32):
 
 def convert_images_npy(dir_path):
     batch_size = 32
-    # Iterating over the batches of images
+    # iterate over the batches of images
     generator = image_generator(batch_size=batch_size)
     i = 0
     while i <= len(os.listdir(dir_path)):
@@ -53,16 +53,19 @@ def merge_npys(dir_path):
     data = np.load(npy_files[0], allow_pickle=True)
     for f in npy_files[1:]:
         data = np.concatenate((data, np.load(f, allow_pickle=True)), axis=0)
-    np.save("./animefaces_data/merged_data.npy", data)
+    np.save("./keras_models/merged_data.npy", data)
 
 
 def load_data(npy_path):
     return np.load(npy_path)
 
 
-def normalize(X):
-    # normalize pixel values between -1 and 1
-    return (X.astype("float32") - 127.5) / 127.5
+def normalize_save_merged_array(X):
+    """
+    Normalize pixel values between -1 and 1 and then save the array
+    """
+    np.save("./keras_models/merged_data.npy",
+            (X.astype("float32") * 127.5 + 127.5).astype(np.uint8))
 
 
 def build_generator():
@@ -156,10 +159,10 @@ def train_GAN(discriminator, generator, gan, X):
     batch_size = 32
     sample_interval = 1000
 
-    # Create a folder to save the generated images
+    # create a folder to save the generated images
     os.makedirs("./anime_face_generated_images", exist_ok=True)
 
-    # Train the GAN
+    # train the GAN
     for epoch in range(epochs):
         # Train discriminator
         idx = np.random.randint(0, X.shape[0], batch_size)
@@ -173,11 +176,11 @@ def train_GAN(discriminator, generator, gan, X):
         discriminator_loss = 0.5 * \
             np.add(discriminator_loss_real, discriminator_loss_fake)
 
-        # Train generator
+        # train generator
         noise = generate_noise(batch_size, 100)
         generator_loss = gan.train_on_batch(noise, np.ones((batch_size, 1)))
 
-        # Save generated images
+        # save generated images
         if epoch % sample_interval == 0:
             print(
                 f"Epoch {epoch}: discriminator_loss = {discriminator_loss},\
@@ -197,32 +200,39 @@ def train_GAN(discriminator, generator, gan, X):
                 "./anime_face_generated_images/anime_faces_%d.png" % epoch)
             plt.close()
 
-    # return trained generator
+    # return the trained models
     return discriminator, generator, gan
 
 
 def save_models(discriminator, generator, gan):
+    """
+    Save the trained models to the disk
+    """
     # make the directory to store models if one does not exist
-    os.makedirs("./anime_faces_GAN_models", exist_ok=True)
-    discriminator.save("./anime_faces_GAN_models/discriminator_model.h5")
-    generator.save("./anime_faces_GAN_models/generator_model.h5")
-    gan.save("./anime_faces_GAN_models/gan_model.h5")
+    os.makedirs("./keras_models/", exist_ok=True)
+    discriminator.save("./keras_models/discriminator_model.h5")
+    generator.save("./keras_models/generator_model.h5")
+    gan.save("./keras_models/gan_model.h5")
 
 
 def load_models(discriminator, generator, gan):
+    """
+    Load the Keras models saved to the disk
+    """
     from tensorflow.keras.models import load_model
 
     discriminator = load_model(
-        "./anime_faces_GAN_models/discriminator_model.h5")
-    generator = load_model("./anime_faces_GAN_models/generator_model.h5")
-    gan = load_model("./anime_faces_GAN_models/gan_model.h5")
+        "./keras_models/discriminator_model.h5")
+    generator = load_model("./keras_models/generator_model.h5")
+    gan = load_model("./keras_models/gan_model.h5")
     return discriminator, generator, gan
 
 
 if __name__ == "__main__":
-    X = load_data("./animefaces_data/merged_data.npy")
-    X = normalize(X)
+    X = load_data("./keras_models/merged_data.npy")
+    # normalize_save_merged_array(X)
     generator = build_generator()
     discriminator = build_and_compile_disriminator()
     gan = build_and_compile_GAN(discriminator, generator)
-    generator = train_GAN(discriminator, generator, gan, X)
+    discriminator, generator, gan = train_GAN(discriminator, generator, gan, X)
+    save_models(discriminator, generator, gan)
