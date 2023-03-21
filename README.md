@@ -1,1 +1,1 @@
-# gan-fashion-mnist
+# CSE 575: Statistical Machine Learning
